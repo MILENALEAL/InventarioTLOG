@@ -5,11 +5,48 @@ import requests
 import urllib.parse
 import re
 
-GLPI_URL = "http://10.0.100.13/glpi/apirest.php"
-USER_TOKEN = "Jxc68wvbHPyd9DGzBJ5VBwFHOlmQY9ZN7Npc8EE5"
-APP_TOKEN = "kbHlm48ydwOcEnMtihIpWi4QyNcOIqIKWLfQrbQM"
-
 st.set_page_config(page_title="Sistema de Gestão - TI", page_icon="💻", layout="wide")
+
+def check_password():
+    def password_entered():
+        if (
+            st.session_state["username"] in st.secrets["passwords"]
+            and st.session_state["password"] == st.secrets["passwords"][st.session_state["username"]]
+        ):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  
+            del st.session_state["username"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.title("🔒 Acesso Restrito - TI")
+        st.text_input("Usuário", key="username")
+        st.text_input("Senha", type="password", key="password")
+        st.button("Entrar", on_click=password_entered)
+        return False
+    
+    elif not st.session_state["password_correct"]:
+        st.title("🔒 Acesso Restrito - TI")
+        st.text_input("Usuário", key="username")
+        st.text_input("Senha", type="password", key="password")
+        st.button("Entrar", on_click=password_entered)
+        st.error("😕 Usuário ou senha incorretos. Tente novamente.")
+        return False
+    
+    else:
+        return True
+
+if not check_password():
+    st.stop()
+
+if st.sidebar.button("Sair / Logout"):
+    del st.session_state["password_correct"]
+    st.rerun()
+
+GLPI_URL = st.secrets["GLPI_URL"]
+USER_TOKEN = st.secrets["USER_TOKEN"]
+APP_TOKEN = st.secrets["APP_TOKEN"]
 
 if 'msg_lic' not in st.session_state: st.session_state.msg_lic = None
 
