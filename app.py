@@ -32,7 +32,6 @@ def check_password():
         return False
     else:
         return True
-s
 if not check_password():
     st.stop()
 
