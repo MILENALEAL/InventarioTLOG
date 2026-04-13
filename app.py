@@ -8,35 +8,31 @@ import re
 st.set_page_config(page_title="Sistema de Gestão - TI", page_icon="💻", layout="wide")
 
 def check_password():
-    def password_entered():
-        if (
-            st.session_state["username"] in st.secrets["passwords"]
-            and st.session_state["password"] == st.secrets["passwords"][st.session_state["username"]]
-        ):
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  
-            del st.session_state["username"]
-        else:
-            st.session_state["password_correct"] = False
-
     if "password_correct" not in st.session_state:
-        st.title("🔒 Acesso Restrito - TI")
-        st.text_input("Usuário", key="username")
-        st.text_input("Senha", type="password", key="password")
-        st.button("Entrar", on_click=password_entered)
+        st.session_state["password_correct"] = False
+
+    if not st.session_state["password_correct"]:
+        col_esq, col_meio, col_dir = st.columns([1, 1.5, 1])
+        
+        with col_meio:
+            with st.form("caixa_login", clear_on_submit=False):
+                st.markdown("<h2 style='text-align: center;'>🔒 Acesso Restrito - TI</h2>", unsafe_allow_html=True)
+                st.markdown("<p style='text-align: center; color: gray;'>Insira suas credenciais para gerenciar a infraestrutura</p>", unsafe_allow_html=True)
+                
+                username = st.text_input("Usuário")
+                password = st.text_input("Senha", type="password")
+                
+                submit = st.form_submit_button("Entrar", use_container_width=True)
+
+                if submit:
+                    if username in st.secrets["passwords"] and password == st.secrets["passwords"][username]:
+                        st.session_state["password_correct"] = True
+                    else:
+                        st.error("😕 Usuário ou senha incorretos. Tente novamente.")
         return False
-    
-    elif not st.session_state["password_correct"]:
-        st.title("🔒 Acesso Restrito - TI")
-        st.text_input("Usuário", key="username")
-        st.text_input("Senha", type="password", key="password")
-        st.button("Entrar", on_click=password_entered)
-        st.error("😕 Usuário ou senha incorretos. Tente novamente.")
-        return False
-    
     else:
         return True
-
+s
 if not check_password():
     st.stop()
 
