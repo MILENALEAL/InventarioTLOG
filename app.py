@@ -16,7 +16,7 @@ def check_password():
         
         with col_meio:
             with st.form("caixa_login", clear_on_submit=False):
-                st.markdown("<h2 style='text-align: center;'>🔒 Acesso Restrito - TI</h2>", unsafe_allow_html=True)
+                st.markdown("<h2 style='text-align: center;'> Acesso Restrito - TI</h2>", unsafe_allow_html=True)
                 st.markdown("<p style='text-align: center; color: gray;'>Insira suas credenciais para gerenciar a infraestrutura</p>", unsafe_allow_html=True)
                 
                 username = st.text_input("Usuário")
@@ -28,10 +28,11 @@ def check_password():
                     if username in st.secrets["passwords"] and password == st.secrets["passwords"][username]:
                         st.session_state["password_correct"] = True
                     else:
-                        st.error("😕 Usuário ou senha incorretos. Tente novamente.")
+                        st.error("Usuário ou senha incorretos. Tente novamente.")
         return False
     else:
         return True
+
 if not check_password():
     st.stop()
 
@@ -103,16 +104,28 @@ def buscar_id_licenca_glpi(email_licenca):
 
 def remover_vinculo_glpi(id_licenca, id_computador):
     headers = conectar_glpi()
-    if not headers: return False
+    if not headers: return False, "Falha na conexão"
     try:
-        url = f"{GLPI_URL}/Computer/{id_computador}/Item_SoftwareLicense"
+        url = f"{GLPI_URL}/SoftwareLicense/{id_licenca}/Item_SoftwareLicense"
         res = requests.get(url, headers=headers)
+        
         if res.status_code in [200, 206]:
-            for link in res.json():
-                if str(link.get('softwarelicenses_id')) == str(id_licenca):
-                    requests.delete(f"{GLPI_URL}/Item_SoftwareLicense/{link['id']}", headers=headers)
-        return True 
-    except: return False
+            links = res.json()
+            for link in links:
+                if str(link.get('items_id')) == str(id_computador):
+                    # Mudança aqui: Capturar a resposta do DELETE!
+                    del_res = requests.delete(f"{GLPI_URL}/Item_SoftwareLicense/{link['id']}", headers=headers)
+                    
+                    if del_res.status_code in [200, 204, 206]:
+                        return True, "Removido do GLPI"
+                    else:
+                        # Se der erro, ele vai cuspir o código exato (ex: 403 Forbidden)
+                        return False, f"GLPI Recusou: {del_res.status_code} - {del_res.text}"
+            
+            return False, "Vínculo não encontrado no GLPI para este computador"
+        return False, f"Erro ao acessar vínculos da licença: {res.status_code}"
+    except Exception as e:
+        return False, str(e)
     finally:
         if headers and "Session-Token" in headers: requests.get(f"{GLPI_URL}/killSession", headers=headers)
 
@@ -308,22 +321,85 @@ with aba_lic:
             un = st.text_input("Nome no GLPI"); ue = st.text_input("E-mail Pessoa")
             if st.form_submit_button("Executar Vínculo"):
                 note, ser, c_id = consultar_glpi_completo(un)
-                cursor = conexao.cursor(); cursor.execute("INSERT INTO utilizadores (nome_pessoa, email_pessoa, id_licenca, notebook, serial, id_computador) VALUES (?,?,?,?,?,?)", (un, ue, d_l[sl], note, ser, c_id))
-                conexao.commit(); st.rerun()
+                cursor = conexao.cursor()
+                cursor.execute("SELECT id, id_licenca FROM utilizadores WHERE nome_pessoa=? OR (id_computador=? AND id_computador IS NOT NULL)", (un, c_id))
+                registros_existentes = cursor.fetchall()
+                
+                for reg in registros_existentes:
+                    id_local = reg[0]
+                    id_lic_velha_local = reg[1]
+                    
+                    if id_lic_velha_local:
+                        cursor.execute("SELECT nome FROM licencas WHERE id=?", (id_lic_velha_local,))
+                        res_lic_velha = cursor.fetchone()
+                        if res_lic_velha:
+                            nome_lic_velha = res_lic_velha[0]
+                            id_lic_velha_glpi = buscar_id_licenca_glpi(nome_lic_velha)
+                            if id_lic_velha_glpi and c_id:
+                                remover_vinculo_glpi(id_lic_velha_glpi, c_id)
+                    
+                    cursor.execute("DELETE FROM utilizadores WHERE id=?", (id_local,))
+                cursor.execute("INSERT INTO utilizadores (nome_pessoa, email_pessoa, id_licenca, notebook, serial, id_computador) VALUES (?,?,?,?,?,?)", (un, ue, d_l[sl], note, ser, c_id))
+                conexao.commit()
+                
+                if c_id:
+                    id_lic_glpi = buscar_id_licenca_glpi(sl)
+                    if id_lic_glpi:
+                        sucesso, msg = vincular_no_glpi(id_lic_glpi, c_id)
+                        if sucesso:
+                            st.session_state.msg_lic = "✅ Limpeza feita! Usuário movido para a licença nova sem duplicatas."
+                        else:
+                            st.session_state.msg_lic = f"⚠️ Salvo localmente, mas falhou ao vincular no GLPI: {msg}"
+                    else:
+                        st.session_state.msg_lic = "⚠️ Salvo localmente. Licença nova não encontrada no GLPI."
+                else:
+                    st.session_state.msg_lic = "⚠️ Salvo localmente. Usuário sem computador no GLPI."
+                
+                st.rerun()
+        
         st.divider()
         sl_v = st.selectbox("Gerenciar licença:", list(d_l.keys()))
-        us = pd.read_sql_query("SELECT id, nome_pessoa as Nome FROM utilizadores WHERE id_licenca=(SELECT id FROM licencas WHERE nome=?)", conexao, params=(sl_v,))
+        us = pd.read_sql_query("SELECT id, nome_pessoa as Nome, id_computador FROM utilizadores WHERE id_licenca=(SELECT id FROM licencas WHERE nome=?)", conexao, params=(sl_v,))
+        
         if not us.empty:
-            st.table(us); u_rem = st.selectbox("Remover:", us['Nome'].tolist())
+            st.table(us[['id', 'Nome']]) 
+            opcoes_rem = {f"{row['Nome']} (Registro {row['id']})": row['id'] for _, row in us.iterrows()}
+            u_sel = st.selectbox("Selecionar para remover:", list(opcoes_rem.keys()))
+            u_id_local = opcoes_rem[u_sel]
+
             if st.button("Remover Pessoa"):
-                cursor = conexao.cursor(); cursor.execute("UPDATE utilizadores SET id_licenca=NULL WHERE nome_pessoa=?", (u_rem,))
-                conexao.commit(); st.rerun()
+                cursor = conexao.cursor()
+                
+                cursor.execute("SELECT id_computador, id_licenca FROM utilizadores WHERE id=?", (u_id_local,))
+                res_user = cursor.fetchone()
+                
+                if res_user and res_user[0]:
+                    c_id_glpi = res_user[0]
+                    id_lic_local = res_user[1]
+                    cursor.execute("SELECT nome FROM licencas WHERE id=?", (id_lic_local,))
+                    nome_lic = cursor.fetchone()[0]
+                    id_lic_glpi = buscar_id_licenca_glpi(nome_lic)
+                    
+                    if id_lic_glpi:
+                        sucesso, msg_glpi = remover_vinculo_glpi(id_lic_glpi, c_id_glpi)
+                        if sucesso:
+                            st.toast(f"✅ GLPI: {msg_glpi}")
+                        else:
+                            st.error(f"❌ Erro GLPI: {msg_glpi}")
+                
+                cursor.execute("UPDATE utilizadores SET id_licenca=NULL WHERE id=?", (u_id_local,))
+                conexao.commit()
+                st.rerun()
+        
         st.divider()
         lic_rem = st.selectbox("Apagar licença inteira:", lcs['nome'].tolist())
         if st.button("Apagar da Lista", type="primary"):
             id_l = int(lcs.loc[lcs['nome'] == lic_rem, 'id'].values[0])
-            cursor = conexao.cursor(); cursor.execute("DELETE FROM utilizadores WHERE id_licenca=?", (id_l,)); cursor.execute("DELETE FROM licencas WHERE id=?", (id_l,))
-            conexao.commit(); st.rerun()
+            cursor = conexao.cursor()
+            cursor.execute("DELETE FROM utilizadores WHERE id_licenca=?", (id_l,))
+            cursor.execute("DELETE FROM licencas WHERE id=?", (id_l,))
+            conexao.commit()
+            st.rerun()
 
 with aba_glpi:
     st.header("🌐 Visão Geral")
